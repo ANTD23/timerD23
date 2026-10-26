@@ -1,7 +1,7 @@
 'use strict';
 /* Спорт-таймер — интервальный таймер (PWA). Без библиотек, данные хранятся только на телефоне. */
 (() => {
-  const APP_VERSION = '1.0.7';
+  const APP_VERSION = '1.0.8';
   const LS_SETTINGS = 'tmr.settings';
   const LS_TEMPLATES = 'tmr.templates';
 
@@ -113,7 +113,7 @@
     }[type];
   }
   function newTemplate(type) {
-    return { id: uid(), type, name: TYPES[type].name, pre: type === 'tabata' ? 3 : null, p: defaultsFor(type), created: Date.now(), updated: Date.now() };
+    return { id: uid(), type, name: TYPES[type].name, pre: type === 'tabata' ? 3 : null, names: { work: '', rest: '' }, p: defaultsFor(type), created: Date.now(), updated: Date.now() };
   }
   function presets() {
     const L = [];
@@ -148,6 +148,9 @@
   function seg(kind, dur, label, info, rk) { return { kind, dur, label: label || KINDS[kind], info: info || '', rk: rk === undefined ? null : String(rk) }; }
   function compile(t) {
     const p = t.p, out = [];
+    // свои названия фаз (пусто — стандартные)
+    const nm = t.names || {};
+    const W = String(nm.work || '').trim(), Rn = String(nm.rest || '').trim();
     if (t.type === 'stopwatch') return { mode: 'sw', segs: [], total: 0 };
     if (p.prep > 0) out.push(seg('prep', p.prep, 'Подготовка'));
     switch (t.type) {
@@ -157,18 +160,18 @@
         for (let s = 1; s <= N; s++) for (let r = 1; r <= R; r++) {
           const info = `Раунд ${r} / ${R}` + (N > 1 ? ` · Подход ${s} / ${N}` : '');
           const rk = (s - 1) * R + r;
-          out.push(seg('work', p.work, null, info, rk));
-          if (r < R) { if (p.rest > 0) out.push(seg('rest', p.rest, null, info, rk)); }
-          else if (s < N) { const d = p.setRest > 0 ? p.setRest : p.rest; if (d > 0) out.push(seg('rest', d, 'Отдых', `Между подходами · ${s} / ${N}`, rk)); }
+          out.push(seg('work', p.work, W || null, info, rk));
+          if (r < R) { if (p.rest > 0) out.push(seg('rest', p.rest, Rn || null, info, rk)); }
+          else if (s < N) { const d = p.setRest > 0 ? p.setRest : p.rest; if (d > 0) out.push(seg('rest', d, Rn || 'Отдых', `Между подходами · ${s} / ${N}`, rk)); }
         }
         if (p.cool > 0) out.push(seg('cool', p.cool));
         break;
       }
       case 'emom':
-        for (let r = 1; r <= p.rounds; r++) out.push(seg('work', p.interval, 'Работа', `${p.interval === 60 ? 'Минута' : 'Интервал'} ${r} / ${p.rounds}`, r));
+        for (let r = 1; r <= p.rounds; r++) out.push(seg('work', p.interval, W || 'Работа', `${p.interval === 60 ? 'Минута' : 'Интервал'} ${r} / ${p.rounds}`, r));
         break;
-      case 'amrap': out.push(seg('work', p.duration, 'Работа', 'Максимум кругов')); break;
-      case 'countdown': out.push(seg('work', p.duration, 'Таймер', '')); break;
+      case 'amrap': out.push(seg('work', p.duration, W || 'Работа', 'Максимум кругов')); break;
+      case 'countdown': out.push(seg('work', p.duration, W || 'Таймер', '')); break;
       case 'custom':
         p.blocks.forEach((b, bi) => { for (let r = 1; r <= b.repeat; r++) for (const st of b.steps) {
           if (st.dur > 0) out.push(seg(st.kind, st.dur, st.name || KINDS[st.kind], (b.name || 'Блок') + (b.repeat > 1 ? ` · ${r} / ${b.repeat}` : ''), `${bi}:${r}`));
@@ -510,7 +513,7 @@
     if (skipPop > 0) { skipPop--; const w = popWaiters.shift(); if (w) w(); return; }
     if (layerOpen) { layer.innerHTML = ''; layerActs = {}; layerOpen = false; return; }
     if (!allowPop) {
-      if (state.screen === 'run' && RUN && !RUN.done && (RUN.running || RUN.base > 0)) {
+      if (state.screen === 'run' && RUN && !RUN.done && RUN.started && (RUN.running || RUN.base > 0)) {
         history.pushState({ screen: 'run' }, ''); askStop(); return;
       }
       if (state.screen === 'edit' && state.dirty) {
@@ -691,6 +694,16 @@
         h += `<button class="add-block" data-act="addBlock">${I('plus')} Добавить блок</button>`;
         break;
     }
+    if (d.type !== 'stopwatch' && d.type !== 'custom') {
+      if (!d.names) d.names = { work: '', rest: '' };
+      const hasRest = d.type === 'rounds' || d.type === 'tabata';
+      const nameRow = (key, label, def) => `<div class="row row-col"><div class="lbl"><span class="lt"><span class="dot" style="background:var(--${key})"></span><span>${label}</span></span><small>Пусто — «${def}»</small></div>
+        <input class="text-input" type="text" data-bind="names.${key}" value="${esc(d.names[key] || '')}" placeholder="${def}" maxlength="30" aria-label="${label}"></div>`;
+      h += `<div class="group-title">Названия фаз</div><div class="group">
+        ${nameRow('work', d.type === 'countdown' ? 'Название таймера на экране' : 'Вместо «Работа»', d.type === 'countdown' ? 'Таймер' : 'Работа')}
+        ${hasRest ? nameRow('rest', 'Вместо «Отдых»', 'Отдых') : ''}
+      </div>`;
+    }
     if (d.type !== 'stopwatch') {
       const useDef = d.pre === null || d.pre === undefined;
       h += `<div class="group-title">Сигналы</div><div class="group">
@@ -805,7 +818,9 @@
       RUN.seg = i;
       const s = c.segs[i], nx = c.segs[i + 1];
       kind = s.kind;
-      main = `<div class="ph-label">${esc(s.label)}</div>
+      const L = s.label.length, longest = Math.max(...s.label.split(/\s+/).map((w) => w.length));
+      const lcls = L > 20 || longest > 11 ? ' lbl-xl' : L > 11 || longest > 9 ? ' lbl-l' : '';
+      main = `<div class="ph-label${lcls}">${esc(s.label)}</div>
         ${c.rounds.length > 1 ? `<div class="round-nav">
           <button class="rn" data-act="rPrev" aria-label="Предыдущий раунд">${I('back')}</button>
           <button class="ph-sub rsel" data-act="rList" aria-label="Выбрать раунд">${esc(s.info || 'Выбрать раунд')}</button>
@@ -827,7 +842,7 @@
 
   /* ================= Действия ================= */
   function askStop() {
-    if (!S.confirmStop || !RUN || RUN.done || (!RUN.running && RUN.base === 0)) { exitRun(); return; }
+    if (!S.confirmStop || !RUN || RUN.done || !RUN.started || (!RUN.running && RUN.base === 0)) { exitRun(); return; }
     const wasRunning = RUN.running;
     confirmBox('Завершить тренировку?', wasRunning ? 'Таймер продолжает идти, пока вы решаете.' : '', 'Завершить', exitRun, true);
   }
@@ -898,6 +913,8 @@
     if (typeof t.id !== 'string' || !/^[a-z0-9_-]{1,40}$/i.test(t.id)) t.id = uid();
     for (const k of ['created', 'updated', 'lastUsed']) if (k in t && typeof t[k] !== 'number') delete t[k];
     t.name = String(t.name || TYPES[t.type].name).slice(0, 60);
+    const nm = t.names && typeof t.names === 'object' ? t.names : {};
+    t.names = { work: String(nm.work || '').slice(0, 30), rest: String(nm.rest || '').slice(0, 30) };
     t.pre = (t.pre === null || t.pre === undefined || t.pre === '') ? null : clamp(parseInt(t.pre, 10) || 0, 0, 60);
     if (t.type === 'custom') {
       t.p = { prep: clamp(parseInt(t.p.prep, 10) || 0, 0, DMAX), blocks: t.p.blocks };

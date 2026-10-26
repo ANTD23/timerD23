@@ -416,3 +416,9 @@ button, .run, .digits, .ph-label, .topbar h1, .card { -webkit-user-select: none;
 .run.phase-bg .rn, .run.phase-bg .round-nav .rsel { background: rgba(0,0,0,.12); color: #000; }
 @media (max-width: 380px) { .rn { width: 52px; height: 52px; } .round-nav .ph-sub.rsel { min-height: 52px; padding: 0 12px; font-size: 1.15rem; } }
 @media (orientation: landscape) and (max-height: 600px) { .round-nav { margin-top: 4px; } .rn { width: 46px; height: 46px; } .round-nav .ph-sub.rsel { min-height: 46px; } }
+
+/* Длинные названия фаз: меньше шрифт, перенос только по словам */
+.ph-label { overflow-wrap: break-word; word-break: normal; }
+.ph-label.lbl-l { font-size: clamp(1.7rem, 8vw, 3.6rem); }
+.ph-label.lbl-xl { font-size: clamp(1.5rem, 6.4vw, 3rem); }
+@media (orientation: landscape) and (max-height: 600px) { .ph-label.lbl-l, .ph-label.lbl-xl { font-size: clamp(1.4rem, 7vh, 2.4rem); } }
