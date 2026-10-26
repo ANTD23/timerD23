@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Спорт-таймер</title>
+  <meta name="description" content="Интервальный спортивный таймер">
+  <meta name="theme-color" content="#000000">
+  <meta name="color-scheme" content="dark light">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="preload" href="fonts/onest-cyrillic-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="styles.css">
+  <script>
+    // Тема применяется до отрисовки, чтобы не было вспышки
+    try {
+      var s = JSON.parse(localStorage.getItem('tmr.settings') || '{}');
+      document.documentElement.dataset.theme = s.theme || 'auto';
+      document.documentElement.style.setProperty('--scale', s.textScale || 1);
+    } catch (e) {}
+  </script>
+</head>
+<body>
+  <div id="app"></div>
+  <div id="layer"></div>
+  <div id="toast" role="status" aria-live="polite"></div>
+  <div id="flash"></div>
+  <input type="file" id="fileIn" hidden>
+  <script src="app.js"></script>
+</body>
+</html>
