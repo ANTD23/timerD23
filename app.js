@@ -1,7 +1,7 @@
 'use strict';
 /* Спорт-таймер — интервальный таймер (PWA). Без библиотек, данные хранятся только на телефоне. */
 (() => {
-  const APP_VERSION = '1.0.5';
+  const APP_VERSION = '1.0.7';
   const LS_SETTINGS = 'tmr.settings';
   const LS_TEMPLATES = 'tmr.templates';
 
@@ -13,6 +13,7 @@
   const P = {
     close: '<path d="M6 6l12 12M18 6L6 18"/>',
     back: '<path d="M15 5l-7 7 7 7"/>',
+    fwd: '<path d="M9 5l7 7-7 7"/>',
     plus: '<path d="M12 5v14M5 12h14"/>',
     minus: '<path d="M5 12h14"/>',
     gear: '<circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.03 1.56V21a2 2 0 1 1-4 0v-.09A1.7 1.7 0 0 0 8.9 19.4a1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.56-1.03H3a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 4.6 8.9a1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 8.96 4.6H9a1.7 1.7 0 0 0 1.03-1.56V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1.03 1.56 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9v.04a1.7 1.7 0 0 0 1.56 1.03H21a2 2 0 1 1 0 4h-.09A1.7 1.7 0 0 0 19.4 15z"/>',
@@ -62,17 +63,18 @@
     stopwatch: { name: 'Секундомер',  desc: 'Прямой счёт с кругами' }
   };
   const DMAX = 5 * 3600;
-  const PATTERNS = [['off', 'Выкл'], ['short', 'Пик'], ['short2', 'Пик-пик'], ['short3', 'Пик ×3'], ['long', 'Длинный'], ['long2', 'Длинный ×2']];
+  const PATTERNS = [['off', 'Выкл'], ['short', 'Пик'], ['short2', 'Пик-пик'], ['short3', 'Пик ×3'], ['long', 'Длинный'], ['long2', 'Длинный ×2'], ['long3', 'Длинный ×3']];
   const PATTERN_IDS = PATTERNS.map((x) => x[0]);
   // из чего состоит каждый сигнал: [звук, сдвиг в секундах]
   const SEQ = { short: [['short', 0]], short2: [['short', 0], ['short', 0.3]], short3: [['short', 0], ['short', 0.3], ['short', 0.6]],
-    long: [['long', 0]], long2: [['long', 0], ['long', 1.1]], finish: [['long', 0], ['long', 1.1]] };
-  const VIB = { short: 150, short2: [120, 120, 120], short3: [120, 120, 120, 120, 120], long: 500, long2: [450, 150, 450], finish: [450, 150, 450, 150, 800] };
+    long: [['long', 0]], long2: [['long', 0], ['long', 0.85]], long3: [['long', 0], ['long', 0.85], ['long', 1.7]],
+    finish: [['long', 0], ['long', 0.85], ['long', 1.7]] };
+  const VIB = { short: 150, short2: [120, 120, 120], short3: [120, 120, 120, 120, 120], long: 500, long2: [450, 250, 450], long3: [450, 250, 450, 250, 450], finish: [450, 150, 450, 150, 800] };
   const KINDS = { work: 'Работа', rest: 'Отдых', prep: 'Подготовка', warm: 'Разминка', cool: 'Заминка', other: 'Другое' };
 
   const DEFAULT_SETTINGS = {
     preSignal: 10, preWork: true, preRest: true, halfway: false, startSound: 'short', startOnResume: false,
-    sndWorkStart: 'long', sndWorkEnd: 'short2', sndFinish: 'long2', count3: false,
+    sndWorkStart: 'long', sndWorkEnd: 'short2', sndFinish: 'long3', count3: false, sndVer: 2,
     sound: true, volume: 1, vibrate: true, flash: true,
     theme: 'auto', textScale: 1, phaseBg: false, keepAwake: 'always', confirmStop: true
   };
@@ -138,11 +140,12 @@
   }
   if (!Array.isArray(T)) { T = presets(); saveT(); }
   else { const seen = new Set(); T = T.map(normalizeTemplate).filter(Boolean).map((t) => { if (seen.has(t.id)) t.id = uid(); seen.add(t.id); return t; }); }
-  S = normalizeSettings(S);
+  S = normalizeSettings(store.get(LS_SETTINGS, null)); saveS();
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
 
   /* ================= Сборка программы ================= */
-  function seg(kind, dur, label, info) { return { kind, dur, label: label || KINDS[kind], info: info || '' }; }
+  // rk — к какому раунду относится фаза (для перехода по раундам)
+  function seg(kind, dur, label, info, rk) { return { kind, dur, label: label || KINDS[kind], info: info || '', rk: rk === undefined ? null : String(rk) }; }
   function compile(t) {
     const p = t.p, out = [];
     if (t.type === 'stopwatch') return { mode: 'sw', segs: [], total: 0 };
@@ -153,27 +156,31 @@
         const R = p.rounds, N = p.sets;
         for (let s = 1; s <= N; s++) for (let r = 1; r <= R; r++) {
           const info = `Раунд ${r} / ${R}` + (N > 1 ? ` · Подход ${s} / ${N}` : '');
-          out.push(seg('work', p.work, null, info));
-          if (r < R) { if (p.rest > 0) out.push(seg('rest', p.rest, null, info)); }
-          else if (s < N) { const d = p.setRest > 0 ? p.setRest : p.rest; if (d > 0) out.push(seg('rest', d, 'Отдых', `Между подходами · ${s} / ${N}`)); }
+          const rk = (s - 1) * R + r;
+          out.push(seg('work', p.work, null, info, rk));
+          if (r < R) { if (p.rest > 0) out.push(seg('rest', p.rest, null, info, rk)); }
+          else if (s < N) { const d = p.setRest > 0 ? p.setRest : p.rest; if (d > 0) out.push(seg('rest', d, 'Отдых', `Между подходами · ${s} / ${N}`, rk)); }
         }
         if (p.cool > 0) out.push(seg('cool', p.cool));
         break;
       }
       case 'emom':
-        for (let r = 1; r <= p.rounds; r++) out.push(seg('work', p.interval, 'Работа', `${p.interval === 60 ? 'Минута' : 'Интервал'} ${r} / ${p.rounds}`));
+        for (let r = 1; r <= p.rounds; r++) out.push(seg('work', p.interval, 'Работа', `${p.interval === 60 ? 'Минута' : 'Интервал'} ${r} / ${p.rounds}`, r));
         break;
       case 'amrap': out.push(seg('work', p.duration, 'Работа', 'Максимум кругов')); break;
       case 'countdown': out.push(seg('work', p.duration, 'Таймер', '')); break;
       case 'custom':
-        for (const b of p.blocks) for (let r = 1; r <= b.repeat; r++) for (const st of b.steps) {
-          if (st.dur > 0) out.push(seg(st.kind, st.dur, st.name || KINDS[st.kind], (b.name || 'Блок') + (b.repeat > 1 ? ` · ${r} / ${b.repeat}` : '')));
-        }
+        p.blocks.forEach((b, bi) => { for (let r = 1; r <= b.repeat; r++) for (const st of b.steps) {
+          if (st.dur > 0) out.push(seg(st.kind, st.dur, st.name || KINDS[st.kind], (b.name || 'Блок') + (b.repeat > 1 ? ` · ${r} / ${b.repeat}` : ''), `${bi}:${r}`));
+        } });
         break;
     }
     let acc = 0;
     out.forEach((s) => { s.start = acc; acc += s.dur; });
-    return { mode: 'seq', segs: out, total: acc };
+    // список раундов: начало каждого раунда и его подпись
+    const rounds = [];
+    out.forEach((s, i) => { if (s.rk !== null && (!rounds.length || rounds[rounds.length - 1].rk !== s.rk)) rounds.push({ rk: s.rk, start: s.start, seg: i, label: s.info || s.label }); });
+    return { mode: 'seq', segs: out, total: acc, rounds };
   }
   const preFor = (t) => (t.pre === null || t.pre === undefined ? S.preSignal : t.pre);
 
@@ -356,12 +363,15 @@
     if (!RUN || RUN.done) return;
     Snd.unlock().finally(() => {
       if (!RUN || RUN.running || RUN.done) return;
-      const fresh = RUN.base === 0;
+      const fresh = !RUN.started;
       RUN.resumeAt = nowMs();
       RUN.running = true;
       RUN.started = true;
       // сигнал запуска: при старте и (по настройке) после паузы
-      if (S.startSound !== 'off' && (fresh || S.startOnResume)) cue(S.startSound, true);
+      // если таймер начинается сразу с работы — звучит «Начало работы», иначе «Сигнал при запуске»
+      const first = RUN.c.mode === 'seq' ? RUN.c.segs[segAt(RUN.base)] : null;
+      const snd = fresh && isWork(first) ? S.sndWorkStart : S.startSound;
+      if (snd !== 'off' && (fresh || S.startOnResume)) cue(snd, true);
       if (RUN.c.mode === 'sw' && RUN.t.p.beepEvery > 0 && !RUN.nextBeep) RUN.nextBeep = RUN.t.p.beepEvery;
       schedule();
       renderRun();
@@ -740,7 +750,7 @@
           ${sw('Звук', 'sound')}
           <div class="row row-col"><div class="lbl">Громкость сигнала</div><input class="range" type="range" min="0.1" max="1" step="0.05" value="${S.volume}" data-range="volume" aria-label="Громкость"></div>
           <div class="row"><div class="lbl">Проверить</div><div class="seg" style="flex:none"><button data-act="test" data-v="short">Короткий</button><button data-act="test" data-v="long">Длинный</button></div></div>
-          <div class="row row-col"><div class="lbl">Сигнал при запуске таймера<small>Звучит в момент нажатия «Старт»</small></div>${segBtns('startSound', [['off', 'Выкл'], ['short', 'Короткий'], ['long', 'Длинный']])}</div>
+          <div class="row row-col"><div class="lbl">Сигнал при нажатии «Старт»<small>Когда таймер начинается с подготовки или разминки. Если сразу идёт работа — звучит «Начало работы»</small></div>${segBtns('startSound', PATTERNS)}</div>
           ${S.startSound !== 'off' ? sw('И при продолжении после паузы', 'startOnResume') : ''}
           ${sw('Вибрация', 'vibrate')}
           ${sw('Вспышка экрана при сигнале', 'flash')}
@@ -796,7 +806,10 @@
       const s = c.segs[i], nx = c.segs[i + 1];
       kind = s.kind;
       main = `<div class="ph-label">${esc(s.label)}</div>
-        <div class="ph-sub">${esc(s.info)}</div>
+        ${c.rounds.length > 1 ? `<div class="round-nav">
+          <button class="rn" data-act="rPrev" aria-label="Предыдущий раунд">${I('back')}</button>
+          <button class="ph-sub rsel" data-act="rList" aria-label="Выбрать раунд">${esc(s.info || 'Выбрать раунд')}</button>
+          <button class="rn" data-act="rNext" aria-label="Следующий раунд">${I('fwd')}</button></div>` : `<div class="ph-sub">${esc(s.info)}</div>`}
         <div class="digits" id="dig"></div>
         <div class="bar"><i id="bar"></i></div>
         ${t.type === 'amrap' && s.kind === 'work' ? `<div class="amrap"><button data-act="amrapMinus" aria-label="Минус круг">−1</button><button class="plus" data-act="amrapPlus">+1 круг · ${RUN.amrap}</button></div>` : ''}
@@ -909,7 +922,9 @@
     if (!['auto', 'light', 'dark'].includes(out.theme)) out.theme = 'auto';
     if (![1, 1.15, 1.3].includes(out.textScale)) out.textScale = 1;
     if (!['always', 'run'].includes(out.keepAwake)) out.keepAwake = 'always';
-    if (!['off', 'short', 'long'].includes(out.startSound)) out.startSound = 'short';
+    if (!PATTERN_IDS.includes(out.startSound)) out.startSound = 'short';
+    // однократно: конец тренировки — тройной длинный
+    if (!x || x.sndVer !== 2) { out.sndFinish = 'long3'; out.sndVer = 2; }
     for (const k of ['sndWorkStart', 'sndWorkEnd', 'sndFinish']) if (!PATTERN_IDS.includes(out[k])) out[k] = DEFAULT_SETTINGS[k];
     return out;
   }
@@ -1071,6 +1086,28 @@
     stop: askStop,
     exitRun: exitRun,
     toggle: () => { if (!RUN) return; RUN.running ? pause() : resume(); },
+    rPrev: () => {
+      const rs = RUN.c.rounds, i = curRound();
+      if (i === -1) return;                       // ещё подготовка/разминка — раньше некуда
+      seek(rs[Math.max(0, Math.min(i, rs.length) - 1)].start * 1000);
+    },
+    rNext: () => {
+      const rs = RUN.c.rounds, i = curRound();
+      if (i + 1 < rs.length) { seek(rs[i + 1].start * 1000); return; }
+      const lastEnd = (() => { const l = RUN.c.segs.filter((x) => x.rk === rs[rs.length - 1].rk).pop(); return l.start + l.dur; })();
+      const after = RUN.c.segs.find((x) => x.start >= lastEnd - 1e-6);
+      if (after && i < rs.length) seek(after.start * 1000);
+      else confirmBox('Завершить тренировку?', '', 'Завершить', () => seek(RUN.c.total * 1000));
+    },
+    rList: () => {
+      const rs = RUN.c.rounds, i = curRound();
+      const items = rs.map((r, k) => ({ label: (k === i ? '✓  ' : '') + r.label, act: () => seek(r.start * 1000) }));
+      const segs = RUN.c.segs;
+      const outside = (x) => ({ label: x.label + ' · ' + fmt(x.dur), act: () => seek(x.start * 1000) });
+      const pre = segs.filter((x) => x.rk === null && x.start < rs[0].start).map(outside);
+      const post = segs.filter((x) => x.rk === null && x.start > rs[0].start).map(outside);
+      sheet('Перейти к раунду', [...pre, ...items, ...post]);
+    },
     prev: () => { const e = elapsed(), s = RUN.c.segs[segAt(e)], i = RUN.c.segs.indexOf(s); seek(e / 1000 - s.start > 2 || i === 0 ? s.start * 1000 : RUN.c.segs[i - 1].start * 1000); },
     next: () => { const e = elapsed(), i = segAt(e), nx = RUN.c.segs[i + 1]; if (nx) seek(nx.start * 1000); else confirmBox('Завершить тренировку?', '', 'Завершить', () => seek(RUN.c.total * 1000)); },
     again: () => { const t = RUN.t; RUN = null; startRunInPlace(t); },
@@ -1079,6 +1116,12 @@
     lap: () => { const e = elapsed(), prev = RUN.laps.length ? RUN.laps[RUN.laps.length - 1].total : 0; RUN.laps.push({ total: e, lap: e - prev }); renderRun(); if (S.vibrate && navigator.vibrate) navigator.vibrate(60); },
     swReset: () => { RUN.base = 0; RUN.laps = []; RUN.nextBeep = 0; renderRun(); }
   };
+  // номер текущего раунда: -1 — до первого раунда, rounds.length — после последнего
+  function curRound() {
+    const rs = RUN.c.rounds, sg = RUN.c.segs[segAt(elapsed())];
+    if (sg.rk !== null) return rs.findIndex((r) => r.rk === sg.rk);
+    return sg.start < rs[0].start ? -1 : rs.length;
+  }
   function startRunInPlace(t) {
     // повтор той же тренировки без нового шага в истории
     const c = compile(t);

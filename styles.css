@@ -405,3 +405,14 @@ button, .run, .digits, .ph-label, .topbar h1, .card { -webkit-user-select: none;
 .run.ready .ctl.main { animation: pulse 1.6s ease-in-out infinite; }
 @keyframes pulse { 0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--ph) 55%, transparent); } 50% { box-shadow: 0 0 0 18px transparent; } }
 .seg button.on { background: var(--accent); color: var(--on-accent); box-shadow: none; }
+
+/* Переход по раундам */
+.round-nav { display: flex; align-items: center; justify-content: center; gap: 10px; margin-top: 12px; max-width: 100%; }
+.rn { width: 60px; height: 60px; border-radius: 50%; background: var(--surface-2); color: var(--text); display: grid; place-items: center; flex: none; }
+.rn svg.i { width: 30px; height: 30px; stroke-width: 2.8; }
+.rn:active { transform: scale(.94); }
+.round-nav .ph-sub.rsel { margin-top: 0; min-height: 60px; padding: 0 18px; border-radius: 30px; background: var(--surface); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.round-nav .ph-sub.rsel:active { background: var(--surface-2); }
+.run.phase-bg .rn, .run.phase-bg .round-nav .rsel { background: rgba(0,0,0,.12); color: #000; }
+@media (max-width: 380px) { .rn { width: 52px; height: 52px; } .round-nav .ph-sub.rsel { min-height: 52px; padding: 0 12px; font-size: 1.15rem; } }
+@media (orientation: landscape) and (max-height: 600px) { .round-nav { margin-top: 4px; } .rn { width: 46px; height: 46px; } .round-nav .ph-sub.rsel { min-height: 46px; } }
