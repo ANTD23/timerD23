@@ -1,6 +1,6 @@
 // Service worker: работа без интернета.
 // При каждом обновлении файлов меняйте номер версии ниже.
-const CACHE = 'sport-timer-v1.0.2';
+const CACHE = 'sport-timer-v1.0.4';
 const FILES = [
   './',
   './index.html',

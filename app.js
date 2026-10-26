@@ -1,7 +1,7 @@
 'use strict';
 /* Спорт-таймер — интервальный таймер (PWA). Без библиотек, данные хранятся только на телефоне. */
 (() => {
-  const APP_VERSION = '1.0.2';
+  const APP_VERSION = '1.0.4';
   const LS_SETTINGS = 'tmr.settings';
   const LS_TEMPLATES = 'tmr.templates';
 
@@ -62,10 +62,17 @@
     stopwatch: { name: 'Секундомер',  desc: 'Прямой счёт с кругами' }
   };
   const DMAX = 5 * 3600;
+  const PATTERNS = [['off', 'Выкл'], ['short', 'Пик'], ['short2', 'Пик-пик'], ['short3', 'Пик ×3'], ['long', 'Длинный'], ['long2', 'Длинный ×2']];
+  const PATTERN_IDS = PATTERNS.map((x) => x[0]);
+  // из чего состоит каждый сигнал: [звук, сдвиг в секундах]
+  const SEQ = { short: [['short', 0]], short2: [['short', 0], ['short', 0.3]], short3: [['short', 0], ['short', 0.3], ['short', 0.6]],
+    long: [['long', 0]], long2: [['long', 0], ['long', 1.1]], finish: [['long', 0], ['long', 1.1]] };
+  const VIB = { short: 150, short2: [120, 120, 120], short3: [120, 120, 120, 120, 120], long: 500, long2: [450, 150, 450], finish: [450, 150, 450, 150, 800] };
   const KINDS = { work: 'Работа', rest: 'Отдых', prep: 'Подготовка', warm: 'Разминка', cool: 'Заминка', other: 'Другое' };
 
   const DEFAULT_SETTINGS = {
-    preSignal: 10, preWork: true, preRest: true, halfway: false,
+    preSignal: 10, preWork: true, preRest: true, halfway: false, startSound: 'short', startOnResume: false,
+    sndWorkStart: 'long', sndWorkEnd: 'short2', sndFinish: 'long2', count3: false,
     sound: true, volume: 1, vibrate: true, flash: true,
     theme: 'auto', textScale: 1, phaseBg: false, keepAwake: 'always', confirmStop: true
   };
@@ -171,24 +178,28 @@
   const preFor = (t) => (t.pre === null || t.pre === undefined ? S.preSignal : t.pre);
 
   const preAllowed = (s, n) => n > 0 && s.dur > n && ((s.kind === 'rest' || s.kind === 'prep') ? S.preRest : S.preWork);
+  const isWork = (s) => s && (s.kind === 'work' || s.kind === 'other');
   function buildEvents(c, t) {
     const n = preFor(t), ev = [];
     c.segs.forEach((s, i) => {
-      const end = s.start + s.dur;
-      if (preAllowed(s, n)) ev.push({ t: end - n, type: 'short' });
-      if (S.halfway && s.kind === 'work' && s.dur >= 30) ev.push({ t: s.start + s.dur / 2, type: 'short' });
-      ev.push({ t: end, type: i === c.segs.length - 1 ? 'finish' : 'long' });
+      const end = s.start + s.dur, nx = c.segs[i + 1];
+      if (preAllowed(s, n)) ev.push({ t: end - n, type: 'short', r: 0 });
+      if (S.halfway && s.kind === 'work' && s.dur >= 30) ev.push({ t: s.start + s.dur / 2, type: 'short', r: 0 });
+      // отсчёт 3-2-1 перед началом работы
+      if (S.count3 && isWork(nx) && !isWork(s)) for (const k of [3, 2, 1]) if (end - k > s.start) ev.push({ t: end - k, type: 'short', r: 1 });
+      // смена фазы
+      const type = !nx ? S.sndFinish : isWork(nx) ? S.sndWorkStart : isWork(s) ? S.sndWorkEnd : 'long';
+      ev.push({ t: end, type, r: 2 });
     });
-    if (c.segs.length && c.segs[0].kind !== 'prep') ev.push({ t: 0, type: 'long' });
-    ev.sort((a, b) => a.t - b.t);
-    // одно событие на один момент времени (длинный сигнал важнее короткого)
-    const rank = { short: 0, long: 1, finish: 2 }, out = [];
+    ev.sort((a, b) => a.t - b.t || a.r - b.r);
+    // одно событие на один момент времени: смена фазы важнее отсчёта, отсчёт важнее предсигнала
+    const out = [];
     for (const e of ev) {
       const last = out[out.length - 1];
-      if (last && Math.abs(last.t - e.t) < 0.05) { if (rank[e.type] > rank[last.type]) out[out.length - 1] = e; }
+      if (last && Math.abs(last.t - e.t) < 0.05) { if (e.r >= last.r) out[out.length - 1] = e; }
       else out.push(e);
     }
-    return out;
+    return out.filter((e) => e.type !== 'off');
   }
 
   function summaryText(t) {
@@ -248,15 +259,17 @@
         this.srcs.add(src);
         src.onended = () => this.srcs.delete(src);
       };
-      if (type === 'short') one('short', t0);
-      else { one('long', t0); if (type === 'finish') one('long', t0 + 1.1); }
+      for (const [name, dt] of SEQ[type] || SEQ.long) one(name, t0 + dt);
     },
     fallback(type) {
-      const name = type === 'short' ? 'short' : 'long';
-      try {
-        const a = this.html[name] || (this.html[name] = new Audio(`sounds/${name}.wav`));
-        a.volume = S.volume; a.currentTime = 0; a.play().catch(() => {});
-      } catch (e) {}
+      for (const [name, dt] of SEQ[type] || SEQ.long) {
+        setTimeout(() => {
+          try {
+            const a = new Audio(`sounds/${name}.wav`);
+            a.volume = S.volume; a.play().catch(() => {});
+          } catch (e) {}
+        }, dt * 1000);
+      }
     },
     cancel() { this.srcs.forEach((s) => { try { s.stop(); } catch (e) {} }); this.srcs.clear(); },
     setVol(v) { if (this.gain) this.gain.gain.value = v; }
@@ -297,7 +310,7 @@
   function cue(type, withSound) {
     if (withSound) Snd.play(type);
     if (S.vibrate && navigator.vibrate) {
-      navigator.vibrate(type === 'short' ? 150 : type === 'long' ? 500 : [450, 150, 450, 150, 800]);
+      navigator.vibrate(VIB[type] || 500);
     }
     if (S.flash) { flashEl.classList.remove('go'); void flashEl.offsetWidth; flashEl.classList.add('go'); }
   }
@@ -307,25 +320,29 @@
   const nowMs = () => performance.now();
   const elapsed = () => (RUN.running ? RUN.base + (nowMs() - RUN.resumeAt) : RUN.base);
 
-  function startRun(t) {
+  function startRun(t, auto) {
     const tt = clone(t);
     const c = compile(tt);
     if (c.mode === 'seq' && c.total <= 0) { toast('В таймере нет ни одной фазы'); return; }
     RUN = { t: tt, c, events: c.mode === 'seq' ? buildEvents(c, tt) : [], base: 0, resumeAt: 0, running: false, done: false,
-      evIdx: 0, schedIdx: 0, sCtx: 0, sEl: 0, seg: -1, amrap: 0, amrapSplits: [], laps: [], nextBeep: 0, raf: 0, lastDig: '' };
+      evIdx: 0, schedIdx: 0, sCtx: 0, sEl: 0, seg: -1, amrap: 0, amrapSplits: [], laps: [], nextBeep: 0, raf: 0, lastDig: '', started: false };
     const orig = T.find((x) => x.id === t.id);
     if (orig) { orig.lastUsed = Date.now(); saveT(); }
     go('run');
     const p = Snd.unlock();
-    p.finally(() => { if (RUN && !RUN.running && !RUN.done && RUN.base === 0) resume(); });
+    if (auto) p.finally(() => { if (RUN && !RUN.running && !RUN.done && RUN.base === 0) resume(); });
   }
 
   function resume() {
     if (!RUN || RUN.done) return;
     Snd.unlock().finally(() => {
       if (!RUN || RUN.running || RUN.done) return;
+      const fresh = RUN.base === 0;
       RUN.resumeAt = nowMs();
       RUN.running = true;
+      RUN.started = true;
+      // сигнал запуска: при старте и (по настройке) после паузы
+      if (S.startSound !== 'off' && (fresh || S.startOnResume)) cue(S.startSound, true);
       if (RUN.c.mode === 'sw' && RUN.t.p.beepEvery > 0 && !RUN.nextBeep) RUN.nextBeep = RUN.t.p.beepEvery;
       schedule();
       renderRun();
@@ -439,7 +456,9 @@
     if (bar) bar.style.width = `${clamp((e / 1000 - s.start) / s.dur, 0, 1) * 100}%`;
     const foot = $('#foot');
     if (foot) {
-      const txt = RUN.running
+      const txt = !RUN.started && !RUN.running
+        ? `Нажмите ▶, чтобы начать · всего ${fmt(RUN.c.total)}`
+        : RUN.running
         ? `Осталось ${fmt(Math.ceil(RUN.c.total - e / 1000))} · прошло ${fmt(Math.floor(e / 1000))}`
         : `Пауза · осталось ${fmt(Math.ceil(RUN.c.total - e / 1000))}`;
       if (foot.textContent !== txt) foot.textContent = txt;
@@ -557,7 +576,7 @@
   function renderHome() {
     const cards = T.map((t) => {
       const c = compile(t);
-      return `<article class="card">
+      return `<article class="card" data-act="start" data-id="${t.id}">
         <div><div class="badge">${esc(TYPES[t.type].name)}</div><div class="name">${esc(t.name)}</div>
           <div class="meta">${esc(summaryText(t))}${c.mode === 'seq' ? ` · <span class="total">${fmt(c.total)}</span>` : ''}</div></div>
         <div class="side"><button class="play-btn" data-act="start" data-id="${t.id}" aria-label="Старт: ${esc(t.name)}">${I('play')}</button>
@@ -688,12 +707,22 @@
           ${sw('Перед концом отдыха', 'preRest', 'Отдых и подготовка')}
           ${sw('Сигнал на середине работы', 'halfway', 'Для фаз от 30 секунд')}
         </div>
-        <p style="margin:0 8px;color:var(--muted);font-size:.95rem">Короткий сигнал — предупреждение. Длинный — смена фазы. В конце тренировки длинный звучит дважды. В каждом шаблоне предсигнал можно задать свой.</p>
+        <p style="margin:0 8px;color:var(--muted);font-size:.95rem">Короткий «пик» за заданное число секунд до конца фазы. В каждом шаблоне предсигнал можно задать свой.</p>
+        <div class="group-title">Звуки смены фаз</div>
+        <div class="group">
+          <div class="row row-col"><div class="lbl">Начало работы<small>Отдых или подготовка закончились — пора работать</small></div>${segBtns('sndWorkStart', PATTERNS)}</div>
+          <div class="row row-col"><div class="lbl">Конец работы<small>Раунд закончился — отдых</small></div>${segBtns('sndWorkEnd', PATTERNS)}</div>
+          <div class="row row-col"><div class="lbl">Конец тренировки</div>${segBtns('sndFinish', PATTERNS)}</div>
+          ${sw('Отсчёт 3-2-1 перед началом работы', 'count3', 'Три коротких «пик» в последние секунды отдыха')}
+        </div>
+        <p style="margin:0 8px;color:var(--muted);font-size:.95rem">Нажмите на вариант — он прозвучит. Остальные смены фаз (подготовка → разминка и т. п.) — длинный сигнал.</p>
         <div class="group-title">Звук и вибрация</div>
         <div class="group">
           ${sw('Звук', 'sound')}
           <div class="row row-col"><div class="lbl">Громкость сигнала</div><input class="range" type="range" min="0.1" max="1" step="0.05" value="${S.volume}" data-range="volume" aria-label="Громкость"></div>
           <div class="row"><div class="lbl">Проверить</div><div class="seg" style="flex:none"><button data-act="test" data-v="short">Короткий</button><button data-act="test" data-v="long">Длинный</button></div></div>
+          <div class="row row-col"><div class="lbl">Сигнал при запуске таймера<small>Звучит в момент нажатия «Старт»</small></div>${segBtns('startSound', [['off', 'Выкл'], ['short', 'Короткий'], ['long', 'Длинный']])}</div>
+          ${S.startSound !== 'off' ? sw('И при продолжении после паузы', 'startOnResume') : ''}
           ${sw('Вибрация', 'vibrate')}
           ${sw('Вспышка экрана при сигнале', 'flash')}
         </div>
@@ -721,7 +750,7 @@
   function renderRun() {
     if (!RUN) return;
     const t = RUN.t, c = RUN.c;
-    const cls = `run${S.phaseBg ? ' phase-bg' : ''}${!RUN.running && !RUN.done ? ' paused' : ''}`;
+    const cls = `run${S.phaseBg ? ' phase-bg' : ''}${!RUN.running && !RUN.done && RUN.started ? ' paused' : ''}${!RUN.started ? ' ready' : ''}`;
     const top = `<div class="run-top"><button class="icon-btn" data-act="stop" aria-label="Завершить">${I('close')}</button>
       <div class="run-title">${esc(t.name)}</div><div class="awake" id="awake"></div></div>`;
     let main, controls, kind;
@@ -755,7 +784,7 @@
         <div class="next">${nx ? `<span class="dot" style="background:var(--${nx.kind})"></span>Далее: ${esc(nx.label)} <b>${fmt(nx.dur)}</b>` : `${I('flag')} Далее: финиш`}</div>
         <div class="run-foot" id="foot"></div>`;
       controls = `<button class="ctl" data-act="prev" aria-label="Предыдущая фаза">${I('prev')}</button>
-        <button class="ctl main" data-act="toggle" aria-label="${RUN.running ? 'Пауза' : 'Продолжить'}">${I(RUN.running ? 'pause' : 'play')}</button>
+        <button class="ctl main" data-act="toggle" aria-label="${RUN.running ? 'Пауза' : RUN.started ? 'Продолжить' : 'Старт'}">${I(RUN.running ? 'pause' : 'play')}</button>
         <button class="ctl" data-act="next" aria-label="Следующая фаза">${I('next')}</button>`;
     }
     app.innerHTML = `<div class="${cls}" data-kind="${kind}">${top}<main class="run-main">${main}</main><div class="controls">${controls}</div></div>`;
@@ -820,17 +849,15 @@
   }
   async function shareFile(templates, all) {
     const json = backupData(templates, all);
-    const name = all ? `sport-timer-${today()}.json` : `timer-${safeName(templates[0].name)}.json`;
-    const variants = [new File([json], name, { type: 'application/json' }), new File([json], name, { type: 'text/plain' })];
-    if (navigator.canShare) {
-      for (const f of variants) {
-        if (navigator.canShare({ files: [f] })) {
-          try { await navigator.share({ files: [f], title: name }); return; }
-          catch (e) { if (e.name === 'AbortError') return; }
-        }
-      }
+    // Chrome на Android не отправляет .json, поэтому копия уходит как .txt (внутри тот же текст)
+    const base = all ? `sport-timer-${today()}` : `timer-${safeName(templates[0].name)}`;
+    const file = new File([json], base + '.txt', { type: 'text/plain' });
+    if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
+      try { await navigator.share({ files: [file], title: base }); return; }
+      catch (e) { if (e.name === 'AbortError') return; }
     }
-    downloadFile(json, name);
+    downloadFile(json, base + '.json');
+    toast('Этот браузер не умеет отправлять файлы — копия сохранена в «Загрузки»', 4000);
   }
   function normalizeTemplate(x) {
     if (!x || typeof x !== 'object' || !TYPES[x.type] || typeof x.p !== 'object') return null;
@@ -863,6 +890,8 @@
     if (!['auto', 'light', 'dark'].includes(out.theme)) out.theme = 'auto';
     if (![1, 1.15, 1.3].includes(out.textScale)) out.textScale = 1;
     if (!['always', 'run'].includes(out.keepAwake)) out.keepAwake = 'always';
+    if (!['off', 'short', 'long'].includes(out.startSound)) out.startSound = 'short';
+    for (const k of ['sndWorkStart', 'sndWorkEnd', 'sndFinish']) if (!PATTERN_IDS.includes(out[k])) out[k] = DEFAULT_SETTINGS[k];
     return out;
   }
   function importFile(file) {
@@ -995,7 +1024,7 @@
     menu: (el) => templateMenu(el.dataset.id),
     back: () => history.back(),
     save: () => { saveDraft(); toast('Сохранено'); leave(); },
-    runDraft: () => { if (state.dirty && !state.isNew) { /* запускаем как есть, без сохранения */ } startRun(state.draft); },
+    runDraft: () => startRun(state.draft, true),
     delDraft: () => confirmBox('Удалить таймер?', `«${state.draft.name}» будет удалён.`, 'Удалить', () => { T = T.filter((x) => x.id !== state.draft.id); saveT(); state.dirty = false; leave(); toast('Удалено'); }, true),
     input: (el) => {
       const st = el.closest('.stepper'), { root, path, kind, title, unit } = st.dataset;
@@ -1009,7 +1038,11 @@
     kind: (el) => kindMenu(+el.dataset.b, +el.dataset.s),
     stepMenu: (el) => stepMenu(+el.dataset.b, +el.dataset.s),
     blockMenu: (el) => blockMenu(+el.dataset.b),
-    setOpt: (el) => { const k = el.dataset.k; S[k] = k === 'textScale' ? +el.dataset.v : el.dataset.v; saveS(); render(); if (k === 'keepAwake') wake(); },
+    setOpt: (el) => {
+      const k = el.dataset.k; S[k] = k === 'textScale' ? +el.dataset.v : el.dataset.v; saveS(); render();
+      if (k === 'keepAwake') wake();
+      if ((k.startsWith('snd') || k === 'startSound') && S[k] !== 'off') { Snd.unlock().then(() => Snd.play(S[k])); if (S.vibrate && navigator.vibrate) navigator.vibrate(VIB[S[k]] || 300); }
+    },
     test: (el) => { Snd.unlock().then(() => Snd.play(el.dataset.v)); if (S.vibrate && navigator.vibrate) navigator.vibrate(el.dataset.v === 'short' ? 150 : 500); },
     exportAll: () => downloadFile(backupData(T, true), `sport-timer-${today()}.json`),
     shareAll: () => shareFile(T, true),
@@ -1031,7 +1064,7 @@
     // повтор той же тренировки без нового шага в истории
     const c = compile(t);
     RUN = { t, c, events: c.mode === 'seq' ? buildEvents(c, t) : [], base: 0, resumeAt: 0, running: false, done: false,
-      evIdx: 0, schedIdx: 0, sCtx: 0, sEl: 0, seg: -1, amrap: 0, amrapSplits: [], laps: [], nextBeep: 0, raf: 0, lastDig: '' };
+      evIdx: 0, schedIdx: 0, sCtx: 0, sEl: 0, seg: -1, amrap: 0, amrapSplits: [], laps: [], nextBeep: 0, raf: 0, lastDig: '', started: false };
     renderRun();
     resume();
   }
