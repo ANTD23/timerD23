@@ -1,7 +1,7 @@
 'use strict';
 /* Спорт-таймер — интервальный таймер (PWA). Без библиотек, данные хранятся только на телефоне. */
 (() => {
-  const APP_VERSION = '1.0.4';
+  const APP_VERSION = '1.0.5';
   const LS_SETTINGS = 'tmr.settings';
   const LS_TEMPLATES = 'tmr.templates';
 
@@ -234,6 +234,7 @@
         this.gain.gain.value = S.volume;
         this.gain.connect(this.ctx.destination);
         this.ctx.onstatechange = () => { if (RUN && RUN.running) schedule(); };
+        this.warm();
         this.loading = Promise.all(['short', 'long'].map((n) =>
           fetch(`sounds/${n}.wav`).then((r) => r.arrayBuffer())
             .then((a) => new Promise((ok, no) => this.ctx.decodeAudioData(a, ok, no)))
@@ -241,13 +242,29 @@
         )).catch((e) => console.warn('sound', e));
       } catch (e) { this.ctx = null; }
     },
+    // «Прогрев»: Android после тишины включает звуковой выход с задержкой и глотает первый звук.
+    // Проигрываем короткую тишину, чтобы выход уже был включён к первому настоящему сигналу.
+    warm() {
+      try {
+        const b = this.ctx.createBuffer(1, Math.round(this.ctx.sampleRate * 0.25), this.ctx.sampleRate);
+        const src = this.ctx.createBufferSource();
+        src.buffer = b; src.connect(this.ctx.destination); src.start();
+        this.warmAt = this.ctx.currentTime;
+      } catch (e) {}
+    },
     async unlock() {
       this.init();
-      if (this.ctx && this.ctx.state !== 'running') { try { await this.ctx.resume(); } catch (e) {} }
+      if (this.ctx && this.ctx.state !== 'running') {
+        try { await this.ctx.resume(); } catch (e) {}
+        if (this.ctx.state === 'running') this.warm();
+      }
       if (this.loading) await this.loading;
     },
+    // момент, когда сигнал точно не «проглотится»: не раньше чем через 0,15 с после прогрева
+    soon() { return this.ctx ? Math.max(this.ctx.currentTime + 0.05, (this.warmAt || 0) + 0.15) : 0; },
     get ready() { return !!(this.ctx && this.ctx.state === 'running' && this.buf.short && this.buf.long); },
-    play(type, when) {
+    // keep = true: разовый сигнал (старт, проверка), его не обрывает пересборка очереди тренировки
+    play(type, when, keep) {
       if (!S.sound) return;
       if (!this.ready) { this.fallback(type); return; }
       const t0 = Math.max(when || 0, this.ctx.currentTime);
@@ -256,6 +273,7 @@
         src.buffer = this.buf[name];
         src.connect(this.gain);
         src.start(at);
+        if (keep) return;
         this.srcs.add(src);
         src.onended = () => this.srcs.delete(src);
       };
@@ -265,7 +283,8 @@
       for (const [name, dt] of SEQ[type] || SEQ.long) {
         setTimeout(() => {
           try {
-            const a = new Audio(`sounds/${name}.wav`);
+            const a = Snd.html[name] && Snd.html[name].paused ? Snd.html[name] : (Snd.html[name] = new Audio(`sounds/${name}.wav`));
+            a.currentTime = 0;
             a.volume = S.volume; a.play().catch(() => {});
           } catch (e) {}
         }, dt * 1000);
@@ -308,7 +327,7 @@
   /* ================= Сигналы (вибрация, вспышка) ================= */
   const flashEl = $('#flash');
   function cue(type, withSound) {
-    if (withSound) Snd.play(type);
+    if (withSound) Snd.play(type, Snd.ready ? Snd.soon() : 0, true);
     if (S.vibrate && navigator.vibrate) {
       navigator.vibrate(VIB[type] || 500);
     }
@@ -1041,9 +1060,9 @@
     setOpt: (el) => {
       const k = el.dataset.k; S[k] = k === 'textScale' ? +el.dataset.v : el.dataset.v; saveS(); render();
       if (k === 'keepAwake') wake();
-      if ((k.startsWith('snd') || k === 'startSound') && S[k] !== 'off') { Snd.unlock().then(() => Snd.play(S[k])); if (S.vibrate && navigator.vibrate) navigator.vibrate(VIB[S[k]] || 300); }
+      if ((k.startsWith('snd') || k === 'startSound') && S[k] !== 'off') { Snd.unlock().then(() => Snd.play(S[k], Snd.ready ? Snd.soon() : 0, true)); if (S.vibrate && navigator.vibrate) navigator.vibrate(VIB[S[k]] || 300); }
     },
-    test: (el) => { Snd.unlock().then(() => Snd.play(el.dataset.v)); if (S.vibrate && navigator.vibrate) navigator.vibrate(el.dataset.v === 'short' ? 150 : 500); },
+    test: (el) => { Snd.unlock().then(() => Snd.play(el.dataset.v, Snd.ready ? Snd.soon() : 0, true)); if (S.vibrate && navigator.vibrate) navigator.vibrate(el.dataset.v === 'short' ? 150 : 500); },
     exportAll: () => downloadFile(backupData(T, true), `sport-timer-${today()}.json`),
     shareAll: () => shareFile(T, true),
     import: () => $('#fileIn').click(),
