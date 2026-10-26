@@ -1,7 +1,7 @@
 'use strict';
 /* Спорт-таймер — интервальный таймер (PWA). Без библиотек, данные хранятся только на телефоне. */
 (() => {
-  const APP_VERSION = '1.0.1';
+  const APP_VERSION = '1.0.2';
   const LS_SETTINGS = 'tmr.settings';
   const LS_TEMPLATES = 'tmr.templates';
 
